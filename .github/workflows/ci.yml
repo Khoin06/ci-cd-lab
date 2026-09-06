@@ -38,3 +38,14 @@ jobs:
       - name: Push Docker image
         run: |
           docker push ghcr.io/khoin06/ci-cd-lab:latest
+      - name: Deploy to master-02
+        run: |
+          ssh master-02@192.168.56.12 '
+            docker pull ghcr.io/khoin06/ci-cd-lab:latest &&
+            docker stop ci-cd-app || true &&
+            docker rm ci-cd-app || true &&
+            docker run -d \
+              --name ci-cd-app \
+              -p 5000:5000 \
+              ghcr.io/khoin06/ci-cd-lab:latest
+          '
