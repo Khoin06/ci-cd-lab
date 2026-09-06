@@ -1,3 +1,4 @@
+
 name: Python CI
 
 on:
@@ -26,3 +27,6 @@ jobs:
         run: |
           source venv-ci/bin/activate
           pytest
+      - name: Build Docker image
+        run: |
+          docker build -t ci-cd-lab:latest .
