@@ -29,7 +29,7 @@ jobs:
           pytest
       - name: Build Docker image
         run: |
-          docker build -t ci-cd-lab:latest .
+          docker build -t ghcr.io/khoin06/ci-cd-lab:latest .
 
       - name: Login to GHCR
         run: |
