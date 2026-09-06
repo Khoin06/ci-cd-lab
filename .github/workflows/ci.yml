@@ -1,4 +1,4 @@
-name: First CI
+name: Python CI
 
 on:
   push:
@@ -6,16 +6,23 @@ on:
       - main
 
 jobs:
-  test-runner:
+  test:
     runs-on: self-hosted
 
     steps:
-      - name: Check system
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check Python
+        run: python3 --version
+
+      - name: Install dependencies
         run: |
-          echo "Hello from CI/CD!"
-          echo "Hostname:"
-          hostname
-          echo "User:"
-          whoami
-          echo "OS:"
-          cat /etc/os-release
+          python3 -m venv venv-ci
+          source venv-ci/bin/activate
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          source venv-ci/bin/activate
+          pytest
