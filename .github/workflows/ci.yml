@@ -30,3 +30,11 @@ jobs:
       - name: Build Docker image
         run: |
           docker build -t ci-cd-lab:latest .
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push Docker image
+        run: |
+          docker push ghcr.io/khoin06/ci-cd-lab:latest
