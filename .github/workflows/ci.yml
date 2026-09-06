@@ -1,0 +1,21 @@
+name: First CI
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test-runner:
+    runs-on: self-hosted
+
+    steps:
+      - name: Check system
+        run: |
+          echo "Hello from CI/CD!"
+          echo "Hostname:"
+          hostname
+          echo "User:"
+          whoami
+          echo "OS:"
+          cat /etc/os-release
