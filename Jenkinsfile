@@ -2,13 +2,29 @@ pipeline {
     agent { label 'master-03' }
 
     environment {
-        IMAGE = 'ghcr.io/khoin06/ci-cd-lab:latest'
+        IMAGE_NAME = 'ghcr.io/khoin06/ci-cd-lab'
     }
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
+            }
+        }
+
+        stage('Get Commit SHA') {
+            steps {
+                script {
+                    env.GIT_SHORT_SHA = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                     env.IMAGE = "${IMAGE_NAME}:${GIT_SHORT_SHA}"
+                }
+
+                echo "Commit SHA: ${GIT_SHORT_SHA}"
+                echo "Docker Image: ${IMAGE}"
             }
         }
 
@@ -55,14 +71,14 @@ pipeline {
             steps {
                 sh '''
                     ssh master-02@192.168.56.12 '
-                        docker pull ghcr.io/khoin06/ci-cd-lab:latest
+                        docker pull ${IMAGE}
 
                         docker rm -f ci-cd-app 2>/dev/null || true
 
                         docker run -d \
                             --name ci-cd-app \
                             -p 5000:5000 \
-                            ghcr.io/khoin06/ci-cd-lab:latest
+                            ${IMAGE}
                     '
                 '''
             }
