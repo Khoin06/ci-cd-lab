@@ -1,5 +1,5 @@
 pipeline {
-    agent any
+    agent { label 'master-03' }
 
     environment {
         IMAGE = 'ghcr.io/khoin06/ci-cd-lab:latest'
