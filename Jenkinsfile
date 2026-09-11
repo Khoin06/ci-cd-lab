@@ -69,8 +69,8 @@ pipeline {
 
         stage('Deploy') {
             steps {
-                sh '''
-                    ssh master-02@192.168.56.12 'bash -s' <<EOF
+                sh """
+                    ssh master-02@192.168.56.12 "
                         set -e
 
 
@@ -82,8 +82,8 @@ pipeline {
                             --name ci-cd-app \
                             -p 5000:5000 \
                             ${IMAGE}
-        EOF            
-                '''
+                   "           
+                """
             }
         }
     }
