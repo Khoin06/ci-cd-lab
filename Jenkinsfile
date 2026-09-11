@@ -9,7 +9,7 @@ pipeline {
                 '5e6c9a8',
                 '8b6495d'
             ],
-            description: 'Chọn DEPLOY_NORMAL để deploy bình thường hoặc chọn SHA để rollback'
+            description: 'Chọn DEPLOY_NORMAL để deploy bình thường hoặc chọn SHA để rollback thủ công'
         )
     }
 
@@ -25,7 +25,10 @@ pipeline {
             }
         }
 
-        stage('Rollback') {
+        // =========================
+        // MANUAL ROLLBACK
+        // =========================
+        stage('Manual Rollback') {
             when {
                 expression {
                     return params.ROLLBACK_TAG != 'DEPLOY_NORMAL'
@@ -57,6 +60,9 @@ pipeline {
             }
         }
 
+        // =========================
+        // GET COMMIT SHA
+        // =========================
         stage('Get Commit SHA') {
             when {
                 expression {
@@ -71,7 +77,8 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    env.IMAGE = "${IMAGE_NAME}:${GIT_SHORT_SHA}"
+                    env.IMAGE =
+                        "${IMAGE_NAME}:${GIT_SHORT_SHA}"
                 }
 
                 echo "Commit SHA: ${GIT_SHORT_SHA}"
@@ -79,6 +86,9 @@ pipeline {
             }
         }
 
+        // =========================
+        // TEST
+        // =========================
         stage('Test') {
             when {
                 expression {
@@ -88,14 +98,26 @@ pipeline {
 
             steps {
                 sh '''
+                    echo "===== CREATE VENV ====="
+
                     python3 -m venv venv-ci
+
                     . venv-ci/bin/activate
+
+                    echo "===== INSTALL DEPENDENCIES ====="
+
                     pip install -r requirements.txt
+
+                    echo "===== RUN TEST ====="
+
                     pytest
                 '''
             }
         }
 
+        // =========================
+        // BUILD DOCKER
+        // =========================
         stage('Build Docker Image') {
             when {
                 expression {
@@ -105,11 +127,16 @@ pipeline {
 
             steps {
                 sh '''
+                    echo "===== BUILD DOCKER IMAGE ====="
+
                     docker build -t "$IMAGE" .
                 '''
             }
         }
 
+        // =========================
+        // PUSH GHCR
+        // =========================
         stage('Push GHCR') {
             when {
                 expression {
@@ -127,9 +154,13 @@ pipeline {
                         )
                     ]) {
                         sh '''
+                            echo "===== LOGIN GHCR ====="
+
                             echo "$GHCR_TOKEN" | docker login ghcr.io \
                                 -u "$GHCR_USER" \
                                 --password-stdin
+
+                            echo "===== PUSH IMAGE ====="
 
                             docker push "$IMAGE"
                         '''
@@ -138,6 +169,40 @@ pipeline {
             }
         }
 
+        // =========================
+        // SAVE CURRENT VERSION
+        // =========================
+        stage('Get Current Version') {
+            when {
+                expression {
+                    return params.ROLLBACK_TAG == 'DEPLOY_NORMAL'
+                }
+            }
+
+            steps {
+                script {
+                    env.PREVIOUS_IMAGE = sh(
+                        script: """
+                            ssh \
+                              -o ServerAliveInterval=30 \
+                              -o ServerAliveCountMax=3 \
+                              master-02@192.168.56.12 \
+                              "docker inspect ci-cd-app \
+                               --format='{{.Config.Image}}' \
+                               2>/dev/null || true"
+                        """,
+                        returnStdout: true
+                    ).trim()
+                }
+
+                echo "===== CURRENT VERSION ====="
+                echo "Previous image: ${PREVIOUS_IMAGE}"
+            }
+        }
+
+        // =========================
+        // DEPLOY NEW VERSION
+        // =========================
         stage('Deploy') {
             when {
                 expression {
@@ -146,6 +211,9 @@ pipeline {
             }
 
             steps {
+                echo "===== DEPLOY NEW VERSION ====="
+                echo "Deploy image: ${IMAGE}"
+
                 sh """
                     ssh \
                       -o ServerAliveInterval=30 \
@@ -160,6 +228,101 @@ pipeline {
                          ${IMAGE}'
                 """
             }
+        }
+
+        // =========================
+        // HEALTH CHECK + AUTO ROLLBACK
+        // =========================
+        stage('Health Check') {
+            when {
+                expression {
+                    return params.ROLLBACK_TAG == 'DEPLOY_NORMAL'
+                }
+            }
+
+            steps {
+                script {
+
+                    echo "===== WAIT APPLICATION START ====="
+
+                    sleep 5
+
+                    echo "===== HEALTH CHECK ====="
+
+                    def status = sh(
+                        script: """
+                            ssh \
+                              -o ServerAliveInterval=30 \
+                              -o ServerAliveCountMax=3 \
+                              master-02@192.168.56.12 \
+                              "curl -fsS http://localhost:5000/health"
+                        """,
+                        returnStatus: true
+                    )
+
+                    if (status != 0) {
+
+                        echo "===== HEALTH CHECK FAILED ====="
+
+                        if (env.PREVIOUS_IMAGE?.trim()) {
+
+                            echo "===== AUTO ROLLBACK ====="
+                            echo "Rollback to: ${PREVIOUS_IMAGE}"
+
+                            sh """
+                                ssh \
+                                  -o ServerAliveInterval=30 \
+                                  -o ServerAliveCountMax=3 \
+                                  master-02@192.168.56.12 \
+                                  'set -e; \
+                                   docker pull ${PREVIOUS_IMAGE}; \
+                                   docker rm -f ci-cd-app 2>/dev/null || true; \
+                                   docker run -d \
+                                     --name ci-cd-app \
+                                     -p 5000:5000 \
+                                     ${PREVIOUS_IMAGE}'
+                            """
+
+                            echo "===== ROLLBACK COMPLETED ====="
+
+                        } else {
+
+                            echo "No previous image found. Cannot rollback."
+                        }
+
+                        error(
+                            "New deployment failed health check. " +
+                            "Automatic rollback executed."
+                        )
+                    }
+
+                    echo "===== HEALTH CHECK PASSED ====="
+                }
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo "================================"
+            echo "PIPELINE SUCCESS"
+            echo "================================"
+
+            script {
+                if (params.ROLLBACK_TAG == 'DEPLOY_NORMAL') {
+                    echo "Deployed image: ${IMAGE}"
+                } else {
+                    echo "Manual rollback image: ${ROLLBACK_IMAGE}"
+                }
+            }
+        }
+
+        failure {
+            echo "================================"
+            echo "PIPELINE FAILED"
+            echo "Check Console Output"
+            echo "================================"
         }
     }
 }
