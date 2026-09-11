@@ -1,6 +1,18 @@
 pipeline {
     agent { label 'master-03' }
 
+    parameters {
+        choice(
+            name: 'ROLLBACK_TAG',
+            choices: [
+                'DEPLOY_NORMAL',
+                '5e6c9a8',
+                '8b6495d'
+            ],
+            description: 'Chọn DEPLOY_NORMAL để deploy bình thường hoặc chọn SHA để rollback'
+        )
+    }
+
     environment {
         IMAGE_NAME = 'ghcr.io/khoin06/ci-cd-lab'
     }
@@ -13,7 +25,45 @@ pipeline {
             }
         }
 
+        stage('Rollback') {
+            when {
+                expression {
+                    return params.ROLLBACK_TAG != 'DEPLOY_NORMAL'
+                }
+            }
+
+            steps {
+                script {
+                    env.ROLLBACK_IMAGE =
+                        "${IMAGE_NAME}:${params.ROLLBACK_TAG}"
+                }
+
+                echo "===== MANUAL ROLLBACK ====="
+                echo "Rollback image: ${ROLLBACK_IMAGE}"
+
+                sh """
+                    ssh \
+                      -o ServerAliveInterval=30 \
+                      -o ServerAliveCountMax=3 \
+                      master-02@192.168.56.12 \
+                      'set -e; \
+                       docker pull ${ROLLBACK_IMAGE}; \
+                       docker rm -f ci-cd-app 2>/dev/null || true; \
+                       docker run -d \
+                         --name ci-cd-app \
+                         -p 5000:5000 \
+                         ${ROLLBACK_IMAGE}'
+                """
+            }
+        }
+
         stage('Get Commit SHA') {
+            when {
+                expression {
+                    return params.ROLLBACK_TAG == 'DEPLOY_NORMAL'
+                }
+            }
+
             steps {
                 script {
                     env.GIT_SHORT_SHA = sh(
@@ -30,36 +80,43 @@ pipeline {
         }
 
         stage('Test') {
+            when {
+                expression {
+                    return params.ROLLBACK_TAG == 'DEPLOY_NORMAL'
+                }
+            }
+
             steps {
                 sh '''
-                    echo "===== CREATE VENV ====="
-
                     python3 -m venv venv-ci
-
                     . venv-ci/bin/activate
-
-                    echo "===== INSTALL DEPENDENCIES ====="
-
                     pip install -r requirements.txt
-
-                    echo "===== RUN TEST ====="
-
                     pytest
                 '''
             }
         }
 
         stage('Build Docker Image') {
+            when {
+                expression {
+                    return params.ROLLBACK_TAG == 'DEPLOY_NORMAL'
+                }
+            }
+
             steps {
                 sh '''
-                    echo "===== BUILD DOCKER IMAGE ====="
-
                     docker build -t "$IMAGE" .
                 '''
             }
         }
 
         stage('Push GHCR') {
+            when {
+                expression {
+                    return params.ROLLBACK_TAG == 'DEPLOY_NORMAL'
+                }
+            }
+
             steps {
                 retry(3) {
                     withCredentials([
@@ -70,13 +127,9 @@ pipeline {
                         )
                     ]) {
                         sh '''
-                            echo "===== LOGIN GHCR ====="
-
                             echo "$GHCR_TOKEN" | docker login ghcr.io \
                                 -u "$GHCR_USER" \
                                 --password-stdin
-
-                            echo "===== PUSH IMAGE ====="
 
                             docker push "$IMAGE"
                         '''
@@ -86,10 +139,14 @@ pipeline {
         }
 
         stage('Deploy') {
+            when {
+                expression {
+                    return params.ROLLBACK_TAG == 'DEPLOY_NORMAL'
+                }
+            }
+
             steps {
                 sh """
-                    echo "===== DEPLOY TO MASTER-02 ====="
-
                     ssh \
                       -o ServerAliveInterval=30 \
                       -o ServerAliveCountMax=3 \
@@ -103,17 +160,6 @@ pipeline {
                          ${IMAGE}'
                 """
             }
-        }
-    }
-
-    post {
-        success {
-            echo "===== PIPELINE SUCCESS ====="
-            echo "Deployed image: ${IMAGE}"
-        }
-
-        failure {
-            echo "===== PIPELINE FAILED ====="
         }
     }
 }
