@@ -6,6 +6,7 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
@@ -20,7 +21,7 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                     env.IMAGE = "${IMAGE_NAME}:${GIT_SHORT_SHA}"
+                    env.IMAGE = "${IMAGE_NAME}:${GIT_SHORT_SHA}"
                 }
 
                 echo "Commit SHA: ${GIT_SHORT_SHA}"
@@ -31,9 +32,18 @@ pipeline {
         stage('Test') {
             steps {
                 sh '''
+                    echo "===== CREATE VENV ====="
+
                     python3 -m venv venv-ci
+
                     . venv-ci/bin/activate
+
+                    echo "===== INSTALL DEPENDENCIES ====="
+
                     pip install -r requirements.txt
+
+                    echo "===== RUN TEST ====="
+
                     pytest
                 '''
             }
@@ -42,27 +52,35 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 sh '''
-                    docker build -t $IMAGE .
+                    echo "===== BUILD DOCKER IMAGE ====="
+
+                    docker build -t "$IMAGE" .
                 '''
             }
         }
 
         stage('Push GHCR') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'ghcr-credentials',
-                        usernameVariable: 'GHCR_USER',
-                        passwordVariable: 'GHCR_TOKEN'
-                    )
-                ]) {
-                    sh '''
-                        echo "$GHCR_TOKEN" | docker login ghcr.io \
-                            -u "$GHCR_USER" \
-                            --password-stdin
+                retry(3) {
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'ghcr-credentials',
+                            usernameVariable: 'GHCR_USER',
+                            passwordVariable: 'GHCR_TOKEN'
+                        )
+                    ]) {
+                        sh '''
+                            echo "===== LOGIN GHCR ====="
 
-                        docker push "$IMAGE"
-                    '''
+                            echo "$GHCR_TOKEN" | docker login ghcr.io \
+                                -u "$GHCR_USER" \
+                                --password-stdin
+
+                            echo "===== PUSH IMAGE ====="
+
+                            docker push "$IMAGE"
+                        '''
+                    }
                 }
             }
         }
@@ -70,21 +88,32 @@ pipeline {
         stage('Deploy') {
             steps {
                 sh """
-                    ssh master-02@192.168.56.12 "
-                        set -e
+                    echo "===== DEPLOY TO MASTER-02 ====="
 
-
-                        docker pull  "${IMAGE}"
-
-                        docker rm -f ci-cd-app 2>/dev/null || true
-
-                        docker run -d \
-                            --name ci-cd-app \
-                            -p 5000:5000 \
-                            ${IMAGE}
-                   "           
+                    ssh \
+                      -o ServerAliveInterval=30 \
+                      -o ServerAliveCountMax=3 \
+                      master-02@192.168.56.12 \
+                      'set -e; \
+                       docker pull ${IMAGE}; \
+                       docker rm -f ci-cd-app 2>/dev/null || true; \
+                       docker run -d \
+                         --name ci-cd-app \
+                         -p 5000:5000 \
+                         ${IMAGE}'
                 """
             }
+        }
+    }
+
+    post {
+        success {
+            echo "===== PIPELINE SUCCESS ====="
+            echo "Deployed image: ${IMAGE}"
+        }
+
+        failure {
+            echo "===== PIPELINE FAILED ====="
         }
     }
 }
